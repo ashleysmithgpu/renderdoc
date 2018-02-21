@@ -74,6 +74,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "qrenderdoc_module", "qrende
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "version", "renderdoc\renderdoc_version.vcxproj", "{257FD75C-4D17-4A23-A754-23BFD85887A0}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "AMD_RGP", "renderdoc\driver\ihv\amd\AMD_RGP.vcxproj", "{B33F8FFD-3C04-4779-9C3B-E2858387971B}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Development|x64 = Development|x64
@@ -242,6 +244,14 @@ Global
 		{257FD75C-4D17-4A23-A754-23BFD85887A0}.Release|x64.Build.0 = Release|x64
 		{257FD75C-4D17-4A23-A754-23BFD85887A0}.Release|x86.ActiveCfg = Release|Win32
 		{257FD75C-4D17-4A23-A754-23BFD85887A0}.Release|x86.Build.0 = Release|Win32
+		{B33F8FFD-3C04-4779-9C3B-E2858387971B}.Development|x64.ActiveCfg = Development|x64
+		{B33F8FFD-3C04-4779-9C3B-E2858387971B}.Development|x64.Build.0 = Development|x64
+		{B33F8FFD-3C04-4779-9C3B-E2858387971B}.Development|x86.ActiveCfg = Development|Win32
+		{B33F8FFD-3C04-4779-9C3B-E2858387971B}.Development|x86.Build.0 = Development|Win32
+		{B33F8FFD-3C04-4779-9C3B-E2858387971B}.Release|x64.ActiveCfg = Release|x64
+		{B33F8FFD-3C04-4779-9C3B-E2858387971B}.Release|x64.Build.0 = Release|x64
+		{B33F8FFD-3C04-4779-9C3B-E2858387971B}.Release|x86.ActiveCfg = Release|Win32
+		{B33F8FFD-3C04-4779-9C3B-E2858387971B}.Release|x86.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -273,5 +283,6 @@ Global
 		{A8998B2D-652A-47F8-955B-5654B222B4EB} = {A0E6051E-4374-42E0-9F3C-28DFC64A1029}
 		{61157930-78C3-4355-8B49-4CC91B98F17B} = {A0E6051E-4374-42E0-9F3C-28DFC64A1029}
 		{257FD75C-4D17-4A23-A754-23BFD85887A0} = {B5A783D9-AEB9-420D-8E77-D4D930F8D88C}
+		{B33F8FFD-3C04-4779-9C3B-E2858387971B} = {4DA2F3E3-9A65-45DD-A69B-82C7757D4904}
 	EndGlobalSection
 EndGlobal
