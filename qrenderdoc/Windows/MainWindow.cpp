@@ -35,6 +35,7 @@
 #include <QProgressDialog>
 #include <QToolButton>
 #include <QToolTip>
+#include <QMatrix4x4>
 #include "Code/QRDUtils.h"
 #include "Code/Resources.h"
 #include "Resources/resource.h"
@@ -154,7 +155,7 @@ MainWindow::MainWindow(ICaptureContext &ctx) : QMainWindow(NULL), ui(new Ui::Mai
 
   QObject::connect(&m_MessageTick, &QTimer::timeout, this, &MainWindow::messageCheck);
   m_MessageTick.setSingleShot(false);
-  m_MessageTick.setInterval(175);
+  m_MessageTick.setInterval(500);
   m_MessageTick.start();
 
   m_RemoteProbeSemaphore.release();
@@ -1105,15 +1106,6 @@ void MainWindow::PopulateRecentCaptureSettings()
   ui->menu_Recent_Capture_Settings->addAction(ui->action_Clear_Capture_Settings_History);
 }
 
-void MainWindow::on_action_Clear_Reported_Bugs_triggered()
-{
-  ui->menu_Reported_Bugs->clear();
-  ui->menu_Reported_Bugs->setEnabled(false);
-
-  m_Ctx.Config().CrashReport_ReportedBugs.clear();
-  m_Ctx.Config().Save();
-}
-
 void MainWindow::PopulateReportedBugs()
 {
   ui->menu_Reported_Bugs->clear();
@@ -1491,7 +1483,10 @@ void MainWindow::setCaptureHasErrors(bool errors)
     statusIcon->setPixmap(m_messageAlternate ? empty : del);
 
     QString text;
-    text = tr("%1 loaded. Capture has %2 issues.").arg(filename).arg(m_Ctx.DebugMessages().size());
+    text = tr("%1 loaded. Capture has %2 errors, warnings or performance notes. "
+              "See the 'Errors and Warnings' window.")
+               .arg(filename)
+               .arg(m_Ctx.DebugMessages().size());
     if(m_Ctx.UnreadMessageCount() > 0)
       text += tr(" %1 Unread.").arg(m_Ctx.UnreadMessageCount());
     statusText->setText(text);
@@ -1528,16 +1523,6 @@ void MainWindow::messageCheck()
 {
   if(m_Ctx.IsCaptureLoaded())
   {
-    if(m_Ctx.Replay().GetCurrentProcessingTime() >= 1.5f)
-    {
-      statusProgress->setVisible(true);
-      statusProgress->setMaximum(0);
-    }
-    else
-    {
-      statusProgress->hide();
-    }
-
     m_Ctx.Replay().AsyncInvoke([this](IReplayController *r) {
       rdcarray<DebugMessage> msgs = r->GetDebugMessages();
 
@@ -2242,6 +2227,399 @@ void MainWindow::on_action_Start_Replay_Loop_triggered()
   RDDialog::show(&popup);
 
   m_Ctx.Replay().CancelReplayLoop();
+}
+
+bool AxisTriangleCubeTestOverlap(QVector3D axis, QVector3D v1, QVector3D v2, QVector3D v3, QVector3D * cube)
+{
+  QVector3D n = axis.normalized();
+
+  float triangleMin = std::numeric_limits<float>::max();
+  float triangleMax = -std::numeric_limits<float>::max();
+  float cubeMin = std::numeric_limits<float>::max();
+  float cubeMax = -std::numeric_limits<float>::max();
+
+  // Project triangle vertices on axis and get max and min distances
+  triangleMin = qMin(triangleMin, QVector3D::dotProduct(n, v1));
+  triangleMin = qMin(triangleMin, QVector3D::dotProduct(n, v2));
+  triangleMin = qMin(triangleMin, QVector3D::dotProduct(n, v3));
+  triangleMax = qMax(triangleMax, QVector3D::dotProduct(n, v1));
+  triangleMax = qMax(triangleMax, QVector3D::dotProduct(n, v2));
+  triangleMax = qMax(triangleMax, QVector3D::dotProduct(n, v3));
+
+  for (size_t i = 0; i < 8; ++i)
+  {
+    cubeMin = qMin(cubeMin, QVector3D::dotProduct(n, cube[i]));
+    cubeMax = qMax(cubeMax, QVector3D::dotProduct(n, cube[i]));
+  }
+
+  return triangleMin <= cubeMax && triangleMax >= cubeMin;
+}
+
+// Tests if a triangle (xyz,xyz,xyz) is definitely within or intersects a unit cube
+bool SeparatingAxisTriangleNDCCubeIntersectsOrInside(float * triangleVertices)
+{
+  QVector3D cube[] = {
+    {-1.0f, -1.0f, 0.0f},
+    {-1.0f, -1.0f, 1.0f},
+    {-1.0f, 1.0f, 0.0f},
+    {-1.0f, 1.0f, 1.0f},
+    {1.0f, -1.0f, 0.0f},
+    {1.0f, -1.0f, 1.0f},
+    {1.0f, 1.0f, 0.0f},
+    {1.0f, 1.0f, 1.0f}
+  };
+  QVector3D cubeNormals[] = {
+    { 1.0f, 0.0f, 0.0f },
+    { 0.0f, 1.0f, 0.0f },
+    { 0.0f, 0.0f, 1.0f },
+    { -1.0f, 0.0f, 0.0f },
+    { 0.0f, -1.0f, 0.0f },
+    { 0.0f, 0.0f, -1.0f },
+  };
+
+  QVector3D v1(triangleVertices[0], triangleVertices[1], triangleVertices[2]);
+  QVector3D v2(triangleVertices[3], triangleVertices[4], triangleVertices[5]);
+  QVector3D v3(triangleVertices[6], triangleVertices[7], triangleVertices[8]);
+
+  QVector3D a = v2 - v1;
+  QVector3D b = v3 - v1;
+  QVector3D triangleNormal = QVector3D::crossProduct(a, b);
+
+  // Test against the triangle normal axis, no overlap means there is a separating axis so we can early out
+  if (!AxisTriangleCubeTestOverlap(triangleNormal, v1, v2, v3, cube))
+    return false;
+
+  QVector3D edge1Normal = QVector3D::crossProduct(triangleNormal, v2 - v1);
+  QVector3D edge2Normal = QVector3D::crossProduct(triangleNormal, v3 - v2);
+  QVector3D edge3Normal = QVector3D::crossProduct(triangleNormal, v1 - v3);
+
+  // Test against each of the triangle edge normals, no overlap means there is a separating axis so we can early out
+  if (!AxisTriangleCubeTestOverlap(edge1Normal, v1, v2, v3, cube) ||
+    !AxisTriangleCubeTestOverlap(edge2Normal, v1, v2, v3, cube) ||
+    !AxisTriangleCubeTestOverlap(edge3Normal, v1, v2, v3, cube))
+    return false;
+
+  // Test aginst each of the normals of the cube, no overlap means there is a separating axis so we can early out
+  for (const QVector3D & normal : cubeNormals)
+  {
+    if (!AxisTriangleCubeTestOverlap(normal, v1, v2, v3, cube))
+      return false;
+  }
+
+  return true;
+}
+
+// Returns the 2D triangle area of a triangle (xyz,xyz,xyz)
+float Calculate2DTriangleArea(float * triangleVertices)
+{
+  QVector3D v1(triangleVertices[0], triangleVertices[1], triangleVertices[2]);
+  QVector3D v2(triangleVertices[3], triangleVertices[4], triangleVertices[5]);
+  QVector3D v3(triangleVertices[6], triangleVertices[7], triangleVertices[8]);
+
+  return fabs((v1.x() * (v2.y() - v3.y()) + v2.x() * (v3.y() - v1.y()) + v3.x() * (v1.y() - v2.y())) / 2.0f);
+}
+
+void GetStatisticsForTriangle(PolygonSoupAnalysisData & analysisData, float & triangleArea, float * v1, float * v2, float * v3)
+{
+  QMatrix4x4 m(v1[0], v1[1], v1[3], 0.0f,
+    v2[0], v2[1], v2[3], 0.0f,
+    v3[0], v3[1], v3[3], 0.0f,
+    0.0f, 0.0f, 0.0f, 1.0f);
+  if (m.determinant() > 0.0f)
+  {
+    analysisData.NumBackFacingTriangles++;
+  }
+  else
+  {
+    analysisData.NumFrontFacingTriangles++;
+  }
+
+  float verts[] = {
+    v1[0] / v1[3], v1[1] / v1[3], v1[2] / v1[3],
+    v2[0] / v2[3], v2[1] / v2[3], v2[2] / v2[3],
+    v3[0] / v3[3], v3[1] / v3[3], v3[2] / v3[3]
+  };
+  bool outsideFrustum = !SeparatingAxisTriangleNDCCubeIntersectsOrInside(verts);
+  if (outsideFrustum)
+    analysisData.NumTrianglesOutsideFrustum++;
+
+  triangleArea += Calculate2DTriangleArea(verts);
+}
+
+void MainWindow::AnalyzePolygonSoup(const DrawcallDescription &draw, IReplayController *r, PolygonSoupAnalysisData & analysisData, QTextStream & csvOut)
+{
+  csvOut << tr("%1,").arg(draw.eventId);
+
+  PolygonSoupAnalysisData analysisDataDrawStart = analysisData;
+  float triangleArea = 0.0f;
+
+  if (draw.flags & DrawFlags::Drawcall &&
+    !(draw.flags & DrawFlags::Dispatch)) // Performance counters ignore disptaches
+  {
+    r->SetFrameEvent(draw.eventId, true);
+    analysisData.NumDrawCalls++;
+
+    uint32_t numInstances = draw.flags & DrawFlags::Instanced ? draw.numInstances : 1;
+
+    if (draw.numInstances > 1)
+      analysisData.NumInstances += numInstances;
+
+    for (uint32_t instanceId = 0; instanceId < numInstances; ++instanceId)
+    {
+      MeshFormat m_PostVS = r->GetPostVSData(instanceId, MeshDataStage::VSOut);
+
+      // Check if we have index buffers and make sure we have a vertex buffer
+      bytebuf idata;
+      if (m_PostVS.indexResourceId != ResourceId() && draw.flags & DrawFlags::UseIBuffer)
+      {
+        idata = r->GetBufferData(m_PostVS.indexResourceId, m_PostVS.indexByteOffset,
+        draw.numIndices * m_PostVS.indexByteStride);
+
+        Q_ASSERT(!idata.isEmpty());
+      }
+
+      if (m_PostVS.vertexResourceId != ResourceId())
+      {
+        bytebuf bufdata = r->GetBufferData(m_PostVS.vertexResourceId, m_PostVS.vertexByteOffset, 0);
+
+        size_t sz = bufdata.size();
+
+        uint32_t vertex_stride_in_floats = m_PostVS.vertexByteStride / sizeof(float);
+
+        // Non indexed draw
+        if (idata.isEmpty())
+        {
+          if (draw.topology == Topology::TriangleList)
+          {
+            analysisData.TopologyIndexType[size_t(draw.topology)][0]++;
+            analysisData.TotalTriangles += draw.numIndices / 3;
+            for (uint32_t i = 0; i < draw.numIndices * m_PostVS.vertexByteStride; i += m_PostVS.vertexByteStride * 9)
+            {
+              float * v1 = reinterpret_cast<float*>(&bufdata.data()[i]);
+              float * v2 = reinterpret_cast<float*>(&bufdata.data()[i + m_PostVS.vertexByteStride * 3]);
+              float * v3 = reinterpret_cast<float*>(&bufdata.data()[i + m_PostVS.vertexByteStride * 6]);
+
+              GetStatisticsForTriangle(analysisData, triangleArea, v1, v2, v3);
+            }
+          }
+          else if (draw.topology == Topology::TriangleStrip)
+          {
+            analysisData.TopologyIndexType[size_t(draw.topology)][0]++;
+            analysisData.TotalTriangles += qMax(int32_t(draw.numIndices) - 2, 0);
+            for (uint32_t i = m_PostVS.vertexByteStride * 2; i < draw.numIndices * m_PostVS.vertexByteStride; i += m_PostVS.vertexByteStride)
+            {
+              float * v1 = reinterpret_cast<float*>(&bufdata.data()[i - m_PostVS.vertexByteStride * 2]);
+              float * v2 = reinterpret_cast<float*>(&bufdata.data()[i - m_PostVS.vertexByteStride * 1]);
+              float * v3 = reinterpret_cast<float*>(&bufdata.data()[i]);
+
+              GetStatisticsForTriangle(analysisData, triangleArea, v1, v2, v3);
+            }
+          }
+          else if (draw.topology == Topology::PointList)
+          {
+            analysisData.TopologyIndexType[size_t(draw.topology)][0]++;
+          }
+          else
+          {
+            __debugbreak();
+          }
+        }
+        // Indexed draw
+        else
+        {
+          if (draw.topology == Topology::TriangleList)
+          {
+            if (draw.indexByteWidth == 1)
+            {
+              analysisData.TopologyIndexType[size_t(draw.topology)][1]++;
+              analysisData.TotalTriangles += qMin<uint32_t>(uint32_t(idata.size()) / sizeof(byte), draw.numIndices) / 3;
+
+              byte * indices = reinterpret_cast<byte*>(idata.data());
+              float * vertices = reinterpret_cast<float*>(bufdata.data());
+              for (size_t i = 0; i < idata.size() / sizeof(byte) && (uint32_t)i < draw.numIndices; i += 3)
+              {
+                if (indices[i] == indices[i + 1] || indices[i + 1] == indices[i + 2] || indices[i] == indices[i + 2])
+                  analysisData.NumDegenerateTriangles++;
+                else
+                {
+                  float * v1 = &vertices[indices[i] * vertex_stride_in_floats];
+                  float * v2 = &vertices[indices[i + 1] * vertex_stride_in_floats];
+                  float * v3 = &vertices[indices[i + 2] * vertex_stride_in_floats];
+
+                  GetStatisticsForTriangle(analysisData, triangleArea, v1, v2, v3);
+                }
+              }
+            }
+            else if (draw.indexByteWidth == 2)
+            {
+              analysisData.TopologyIndexType[size_t(draw.topology)][2]++;
+              analysisData.TotalTriangles += qMin<uint32_t>(uint32_t(idata.size()) / sizeof(uint16_t), draw.numIndices) / 3;
+
+              uint16_t * indices = reinterpret_cast<uint16_t*>(idata.data());
+              float * vertices = reinterpret_cast<float*>(bufdata.data());
+              for (size_t i = 0; i < idata.size() / sizeof(uint16_t) && (uint32_t)i < draw.numIndices; i += 3)
+              {
+                if (indices[i] == indices[i + 1] || indices[i + 1] == indices[i + 2] || indices[i] == indices[i + 2])
+                  analysisData.NumDegenerateTriangles++;
+                else
+                {
+                  float * v1 = &vertices[indices[i] * vertex_stride_in_floats];
+                  float * v2 = &vertices[indices[i + 1] * vertex_stride_in_floats];
+                  float * v3 = &vertices[indices[i + 2] * vertex_stride_in_floats];
+
+                  GetStatisticsForTriangle(analysisData, triangleArea, v1, v2, v3);
+                }
+              }
+            }
+            else if (draw.indexByteWidth == 4)
+            {
+              analysisData.TopologyIndexType[size_t(draw.topology)][3]++;
+              analysisData.TotalTriangles += draw.numIndices / 3;
+
+              uint32_t * indices = reinterpret_cast<uint32_t*>(idata.data());
+              float * vertices = reinterpret_cast<float*>(bufdata.data());
+              for (uint32_t i = 0; i < draw.numIndices; i += 3)
+              {
+                if (indices[i] == indices[i + 1] || indices[i + 1] == indices[i + 2] || indices[i] == indices[i + 2])
+                  analysisData.NumDegenerateTriangles++;
+                else
+                {
+                  float * v1 = &vertices[indices[i] * vertex_stride_in_floats];
+                  float * v2 = &vertices[indices[i + 1] * vertex_stride_in_floats];
+                  float * v3 = &vertices[indices[i + 2] * vertex_stride_in_floats];
+
+                  GetStatisticsForTriangle(analysisData, triangleArea, v1, v2, v3);
+                }
+              }
+            }
+            else
+            {
+              __debugbreak();
+            }
+          }
+          else if (draw.topology == Topology::TriangleStrip)
+          {
+            if (draw.indexByteWidth == 1)
+            {
+              __debugbreak();
+            }
+            else if (draw.indexByteWidth == 2)
+            {
+              __debugbreak();
+            }
+            else if (draw.indexByteWidth == 4)
+            {
+              analysisData.TopologyIndexType[size_t(draw.topology)][3]++;
+              analysisData.TotalTriangles += qMax(int32_t(draw.numIndices) - 2, 0);
+
+              uint32_t * indices = reinterpret_cast<uint32_t*>(idata.data());
+              float * vertices = reinterpret_cast<float*>(bufdata.data());
+              for (uint32_t i = 2; i < uint32_t(qMax(int32_t(draw.numIndices) - 2, 0)); i++)
+              {
+                if (indices[i] == indices[i - 1] || indices[i - 1] == indices[i - 2] || indices[i] == indices[i - 2])
+                  analysisData.NumDegenerateTriangles++;
+                else
+                {
+                  float * v1 = &vertices[indices[i - 2] * vertex_stride_in_floats];
+                  float * v2 = &vertices[indices[i - 1] * vertex_stride_in_floats];
+                  float * v3 = &vertices[indices[i] * vertex_stride_in_floats];
+
+                  GetStatisticsForTriangle(analysisData, triangleArea, v1, v2, v3);
+                }
+              }
+            }
+            else
+            {
+              __debugbreak();
+            }
+          }
+          else
+          {
+            __debugbreak();
+          }
+        }
+      }
+    }
+  }
+
+  uint32_t num_triangles_local = analysisData.TotalTriangles- analysisDataDrawStart.TotalTriangles;
+  csvOut << tr("%1,").arg(analysisData.NumFrontFacingTriangles - analysisDataDrawStart.NumFrontFacingTriangles);
+  csvOut << tr("%1,").arg(analysisData.NumBackFacingTriangles - analysisDataDrawStart.NumBackFacingTriangles);
+  csvOut << tr("%1,").arg(analysisData.NumTrianglesOutsideFrustum - analysisDataDrawStart.NumTrianglesOutsideFrustum);
+  csvOut << tr("%1,").arg(analysisData.NumDegenerateTriangles - analysisDataDrawStart.NumDegenerateTriangles);
+  csvOut << tr("%1,").arg(analysisData.NumSmallTriangles - analysisDataDrawStart.NumSmallTriangles);
+  if(num_triangles_local > 0) {
+    csvOut << tr("%1,").arg((triangleArea / float(num_triangles_local)) * float(m_Ctx.CurPipelineState().GetViewport(0).width) * float(m_Ctx.CurPipelineState().GetViewport(0).height));
+  } else {
+    csvOut << tr(",");
+  }
+  csvOut << tr("%1,").arg(analysisData.NumInstances - analysisDataDrawStart.NumInstances);
+  csvOut << tr("%1\n").arg(num_triangles_local);
+  csvOut.flush();
+
+  for (const DrawcallDescription &c : draw.children)
+    AnalyzePolygonSoup(c, r, analysisData, csvOut);
+}
+
+void MainWindow::on_action_Export_Detailed_Data_triggered()
+{
+  if(!m_Ctx.IsCaptureLoaded())
+    return;
+
+  QString csvPath = GetSavePath(tr("CSV file path"), tr("Comma separated value files (*.csv)"));
+  QString txtPath = GetSavePath(tr("txt file path"), tr("Text files (*.txt)"));
+
+  QFile txtFile(txtPath);
+  txtFile.open(QIODevice::WriteOnly);
+  QTextStream txtOut(&txtFile);
+
+  QFile csvFile(csvPath);
+  csvFile.open(QIODevice::WriteOnly);
+  QTextStream csvOut(&csvFile);
+
+  csvOut << tr("EID,Front facing,Back facing,Outside of frustum,Degenerate,Small,Avg triangle area,Num instances,Num triangles in draw\n");
+
+  float progress = 0.0f;
+  bool finished = false;
+
+  // Run the analysis function on the replay data, this may take a while
+  // so report progress after each event
+  m_Ctx.Replay().AsyncInvoke([this, &progress, &finished, &txtOut, &csvOut](IReplayController * r)
+  {
+	const rdcarray<DrawcallDescription> &curDraws = m_Ctx.CurDrawcalls();
+
+    PolygonSoupAnalysisData polygonData;
+    memset(&polygonData, 0, sizeof(PolygonSoupAnalysisData));
+
+    for(size_t i = 0; i < curDraws.size(); ++i)
+    {
+      r->SetFrameEvent(curDraws[i].eventId, true);
+      AnalyzePolygonSoup(curDraws[i], r, polygonData, csvOut);
+      progress = float(i) / float(curDraws.size());
+    }
+
+    txtOut << tr("\nDraw breakdown:\n");
+    txtOut << tr(" Total draw calls: %1\n").arg(polygonData.NumDrawCalls);
+    txtOut << tr(" Draw calls with > 1 instances: %1\n").arg(polygonData.NumInstances);
+    for(size_t topologyType = 0; topologyType < size_t(Topology::TriangleFan); ++topologyType)
+    {
+      QString topologyString = tr(DoStringise((Topology)topologyType).c_str());
+      txtOut << tr(" Non indexed %1: %2\n").arg(topologyString).arg(polygonData.TopologyIndexType[topologyType][0]);
+      txtOut << tr(" Byte indexed %1: %2\n").arg(topologyString).arg(polygonData.TopologyIndexType[topologyType][1]);
+      txtOut << tr(" Short indexed %1: %2\n").arg(topologyString).arg(polygonData.TopologyIndexType[topologyType][2]);
+      txtOut << tr(" Int indexed %1: %2\n").arg(topologyString).arg(polygonData.TopologyIndexType[topologyType][3]);
+    }
+    txtOut << tr("\nPrimitive analysis:\n");
+    txtOut << tr(" Total triangles in frame: %1\n").arg(polygonData.TotalTriangles);
+    txtOut << tr(" Num degenerate triangles: %1\n").arg(polygonData.NumDegenerateTriangles);
+    txtOut << tr(" Num back facing triangles: %1\n").arg(polygonData.NumBackFacingTriangles);
+    txtOut << tr(" Num front facing triangles: %1\n").arg(polygonData.NumFrontFacingTriangles);
+    txtOut << tr(" Num triangles outside of frustum: %1\n").arg(polygonData.NumTrianglesOutsideFrustum);
+    finished = true;
+  });
+
+  ShowProgressDialog(this, tr("Exporting data, this may take a while. We need to process every triangle..."),
+                     [&finished]() { return finished; }, [&progress]() { return progress; });
 }
 
 void MainWindow::on_action_Attach_to_Running_Instance_triggered()

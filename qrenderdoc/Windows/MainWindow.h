@@ -45,6 +45,21 @@ class CaptureDialog;
 class LiveCapture;
 class QNetworkAccessManager;
 
+
+struct PolygonSoupAnalysisData {
+  // Index type: none, byte, short, int
+  uint32_t TopologyIndexType[size_t(Topology::TriangleFan)][4];
+
+  uint32_t NumDrawCalls = 0;
+  uint32_t NumInstances = 0;
+  uint32_t NumFrontFacingTriangles = 0;
+  uint32_t NumBackFacingTriangles = 0;
+  uint32_t NumTrianglesOutsideFrustum = 0;
+  uint32_t NumDegenerateTriangles = 0;
+  uint32_t NumSmallTriangles = 0;
+  uint32_t TotalTriangles = 0;
+};
+
 class MainWindow : public QMainWindow, public IMainWindow, public ICaptureViewer
 {
 private:
@@ -69,6 +84,8 @@ public:
   ToolWindowManager::AreaReference leftToolArea();
 
   void show();
+
+  void AnalyzePolygonSoup(const DrawcallDescription &draw, IReplayController *r, PolygonSoupAnalysisData & data, QTextStream & csvOut);
 
   void setProgress(float val);
   void takeCaptureOwnership() { m_OwnTempCapture = true; }
@@ -130,6 +147,7 @@ private slots:
   void on_action_Attach_to_Running_Instance_triggered();
   void on_action_Manage_Remote_Servers_triggered();
   void on_action_Settings_triggered();
+  void on_action_Export_Detailed_Data_triggered();
   void on_action_View_Documentation_triggered();
   void on_action_View_Diagnostic_Log_File_triggered();
   void on_action_Source_on_GitHub_triggered();
@@ -139,7 +157,6 @@ private slots:
   void on_action_Resource_Inspector_triggered();
   void on_action_Send_Error_Report_triggered();
   void on_action_Check_for_Updates_triggered();
-  void on_action_Clear_Reported_Bugs_triggered();
 
   // manual slots
   void saveLayout_triggered();

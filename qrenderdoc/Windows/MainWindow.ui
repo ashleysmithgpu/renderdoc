@@ -56,6 +56,7 @@
     <addaction name="action_Settings"/>
     <addaction name="action_Manage_Remote_Servers"/>
     <addaction name="separator"/>
+    <addaction name="action_Export_Detailed_Data"/>
    </widget>
    <widget class="QMenu" name="menu_File">
     <property name="title">
@@ -441,6 +442,11 @@
   <action name="action_Recompress_Capture">
    <property name="text">
     <string>Re&amp;compress Capture</string>
+   </property>
+  </action>
+  <action name="action_Export_Detailed_Data">
+   <property name="text">
+    <string>Export Detailed Data</string>
    </property>
   </action>
   <action name="action_Clear_Reported_Bugs">
